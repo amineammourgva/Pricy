@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import datetime
-import plotly.express as px
+import matplotlib.pyplot as plt
 from io import BytesIO
 
 # Initialize session state for data storage
@@ -189,9 +189,27 @@ elif choice == "Benchmark View":
         
         # Historical price chart
         st.subheader(f"Historical Price Trend for {selected_product}")
-        fig = px.line(product_prices, x='Date', y='Price', color='Concession',
-                      title=f"Price Trend for {selected_product}")
-        st.plotly_chart(fig)
+        
+        # Create Matplotlib figure
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Group by concession and plot each one
+        for concession, group in product_prices.groupby('Concession'):
+            group = group.sort_values('Date')
+            ax.plot(group['Date'], group['Price'], marker='o', label=concession)
+        
+        ax.set_title(f"Price Trend for {selected_product}")
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Price")
+        ax.legend()
+        ax.grid(True)
+        
+        # Rotate x-axis labels for better readability
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        
+        # Display the plot in Streamlit
+        st.pyplot(fig)
         
         # Latest price comparison
         st.subheader("Latest Price Comparison")

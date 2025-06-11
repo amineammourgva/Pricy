@@ -3,117 +3,150 @@ import pandas as pd
 import datetime
 import plotly.express as px
 from io import BytesIO
-import sqlite3
-from contextlib import closing
+from supabase import create_client, Client
 
-# Initialize SQLite database
-def init_db():
-    conn = sqlite3.connect('pricy.db')
-    with closing(conn.cursor()) as c:
-        # Create products table
-        c.execute('''CREATE TABLE IF NOT EXISTS products
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                     name TEXT UNIQUE,
-                     category TEXT,
-                     notes TEXT)''')
-        
-        # Create concessions table
-        c.execute('''CREATE TABLE IF NOT EXISTS concessions
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                     name TEXT UNIQUE,
-                     location TEXT,
-                     notes TEXT)''')
-        
-        # Create prices table
-        c.execute('''CREATE TABLE IF NOT EXISTS prices
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                     product_id INTEGER,
-                     concession_id INTEGER,
-                     price REAL,
-                     date DATE,
-                     notes TEXT,
-                     FOREIGN KEY (product_id) REFERENCES products (id),
-                     FOREIGN KEY (concession_id) REFERENCES concessions (id))''')
-    conn.commit()
-    conn.close()
+# Initialize Supabase client
+@st.cache_resource
+def init_supabase():
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
 
-# Helper functions for database operations
-def get_db_connection():
-    return sqlite3.connect('pricy.db')
+supabase = init_supabase()
 
+# Database helper functions
 def add_product(name, category, notes):
-    with closing(get_db_connection()) as conn:
-        c = conn.cursor()
-        try:
-            c.execute("INSERT INTO products (name, category, notes) VALUES (?, ?, ?)",
-                     (name, category, notes))
-            conn.commit()
+    try:
+        response = supabase.table("products").insert({
+            "name": name,
+            "category": category,
+            "notes": notes
+        }).execute()
+        if len(response.data) > 0:
             return True
-        except sqlite3.IntegrityError:
-            return False
+        return False
+    except Exception as e:
+        st.error(f"Error adding product: {str(e)}")
+        return False
 
 def add_concession(name, location, notes):
-    with closing(get_db_connection()) as conn:
-        c = conn.cursor()
-        try:
-            c.execute("INSERT INTO concessions (name, location, notes) VALUES (?, ?, ?)",
-                     (name, location, notes))
-            conn.commit()
+    try:
+        response = supabase.table("concessions").insert({
+            "name": name,
+            "location": location,
+            "notes": notes
+        }).execute()
+        if len(response.data) > 0:
             return True
-        except sqlite3.IntegrityError:
-            return False
+        return False
+    except Exception as e:
+        st.error(f"Error adding concession: {str(e)}")
+        return False
 
 def add_price(product, concession, price, date, notes):
-    with closing(get_db_connection()) as conn:
-        c = conn.cursor()
-        # Get product and concession IDs
-        c.execute("SELECT id FROM products WHERE name=?", (product,))
-        product_id = c.fetchone()[0]
+    try:
+        # Get product ID
+        product_data = supabase.table("products").select("id").eq("name", product).execute()
+        if len(product_data.data) == 0:
+            st.error("Product not found")
+            return False
         
-        c.execute("SELECT id FROM concessions WHERE name=?", (concession,))
-        concession_id = c.fetchone()[0]
+        # Get concession ID
+        concession_data = supabase.table("concessions").select("id").eq("name", concession).execute()
+        if len(concession_data.data) == 0:
+            st.error("Concession not found")
+            return False
         
-        c.execute("""INSERT INTO prices (product_id, concession_id, price, date, notes)
-                     VALUES (?, ?, ?, ?, ?)""",
-                  (product_id, concession_id, price, date, notes))
-        conn.commit()
+        # Insert price
+        response = supabase.table("prices").insert({
+            "product_id": product_data.data[0]["id"],
+            "concession_id": concession_data.data[0]["id"],
+            "price": float(price),
+            "date": date.isoformat(),
+            "notes": notes
+        }).execute()
+        
+        if len(response.data) > 0:
+            return True
+        return False
+    except Exception as e:
+        st.error(f"Error adding price: {str(e)}")
+        return False
 
 def delete_product(name):
-    with closing(get_db_connection()) as conn:
-        c = conn.cursor()
+    try:
         # First delete related prices
-        c.execute("DELETE FROM prices WHERE product_id IN (SELECT id FROM products WHERE name=?)", (name,))
+        product_data = supabase.table("products").select("id").eq("name", name).execute()
+        if len(product_data.data) > 0:
+            supabase.table("prices").delete().eq("product_id", product_data.data[0]["id"]).execute()
+        
         # Then delete the product
-        c.execute("DELETE FROM products WHERE name=?", (name,))
-        conn.commit()
+        supabase.table("products").delete().eq("name", name).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error deleting product: {str(e)}")
+        return False
 
 def delete_concession(name):
-    with closing(get_db_connection()) as conn:
-        c = conn.cursor()
+    try:
         # First delete related prices
-        c.execute("DELETE FROM prices WHERE concession_id IN (SELECT id FROM concessions WHERE name=?)", (name,))
+        concession_data = supabase.table("concessions").select("id").eq("name", name).execute()
+        if len(concession_data.data) > 0:
+            supabase.table("prices").delete().eq("concession_id", concession_data.data[0]["id"]).execute()
+        
         # Then delete the concession
-        c.execute("DELETE FROM concessions WHERE name=?", (name,))
-        conn.commit()
+        supabase.table("concessions").delete().eq("name", name).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error deleting concession: {str(e)}")
+        return False
 
 def get_products_df():
-    with closing(get_db_connection()) as conn:
-        return pd.read_sql("SELECT name as 'Product Name', category as 'Product Category', notes as 'Notes' FROM products", conn)
+    try:
+        response = supabase.table("products").select("*").execute()
+        df = pd.DataFrame(response.data)
+        return df.rename(columns={
+            "name": "Product Name",
+            "category": "Product Category",
+            "notes": "Notes"
+        })
+    except Exception as e:
+        st.error(f"Error fetching products: {str(e)}")
+        return pd.DataFrame()
 
 def get_concessions_df():
-    with closing(get_db_connection()) as conn:
-        return pd.read_sql("SELECT name as 'Concession Name', location as 'Location Tag', notes as 'Notes' FROM concessions", conn)
+    try:
+        response = supabase.table("concessions").select("*").execute()
+        df = pd.DataFrame(response.data)
+        return df.rename(columns={
+            "name": "Concession Name",
+            "location": "Location Tag",
+            "notes": "Notes"
+        })
+    except Exception as e:
+        st.error(f"Error fetching concessions: {str(e)}")
+        return pd.DataFrame()
 
 def get_prices_df():
-    with closing(get_db_connection()) as conn:
-        return pd.read_sql("""SELECT p.name as Product, c.name as Concession, 
-                                     pr.price as Price, pr.date as Date, pr.notes as Notes
-                              FROM prices pr
-                              JOIN products p ON pr.product_id = p.id
-                              JOIN concessions c ON pr.concession_id = c.id""", conn)
-
-# Initialize database
-init_db()
+    try:
+        response = supabase.table("prices").select("*, products(name), concessions(name)").execute()
+        df = pd.DataFrame(response.data)
+        
+        # Rename columns for consistency with original app
+        if not df.empty:
+            df = df.rename(columns={
+                "products.name": "Product",
+                "concessions.name": "Concession",
+                "price": "Price",
+                "date": "Date",
+                "notes": "Notes"
+            })
+            df = df[["Product", "Concession", "Price", "Date", "Notes"]]  # Reorder columns
+        
+        return df
+    except Exception as e:
+        st.error(f"Error fetching prices: {str(e)}")
+        return pd.DataFrame()
 
 # Main App
 st.title("✈️ Pricy")
@@ -128,6 +161,9 @@ if choice == "Dashboard":
     prices_df = get_prices_df()
     
     if not prices_df.empty:
+        # Convert date strings to datetime objects for proper sorting
+        prices_df['Date'] = pd.to_datetime(prices_df['Date'])
+        
         # Latest prices
         st.subheader("Latest Prices")
         latest_prices = prices_df.sort_values('Date', ascending=False).drop_duplicates(['Product', 'Concession'])
@@ -186,6 +222,7 @@ elif choice == "Product Management":
                 if name:
                     if add_product(name, category, notes):
                         st.success(f"Product '{name}' added successfully!")
+                        st.experimental_rerun()
                     else:
                         st.error(f"Product '{name}' already exists!")
                 else:
@@ -200,9 +237,11 @@ elif choice == "Product Management":
                                            products_df['Product Name'].unique())
             
             if st.button("Delete Product"):
-                delete_product(product_to_delete)
-                st.success(f"Product '{product_to_delete}' deleted successfully!")
-                st.experimental_rerun()  # Refresh the view
+                if delete_product(product_to_delete):
+                    st.success(f"Product '{product_to_delete}' deleted successfully!")
+                    st.experimental_rerun()
+                else:
+                    st.error("Failed to delete product")
         else:
             st.info("No products added yet.")
 
@@ -222,6 +261,7 @@ elif choice == "Concession Management":
                 if name:
                     if add_concession(name, location, notes):
                         st.success(f"Concession '{name}' added successfully!")
+                        st.experimental_rerun()
                     else:
                         st.error(f"Concession '{name}' already exists!")
                 else:
@@ -236,9 +276,11 @@ elif choice == "Concession Management":
                                              concessions_df['Concession Name'].unique())
             
             if st.button("Delete Concession"):
-                delete_concession(concession_to_delete)
-                st.success(f"Concession '{concession_to_delete}' deleted successfully!")
-                st.experimental_rerun()  # Refresh the view
+                if delete_concession(concession_to_delete):
+                    st.success(f"Concession '{concession_to_delete}' deleted successfully!")
+                    st.experimental_rerun()
+                else:
+                    st.error("Failed to delete concession")
         else:
             st.info("No concessions added yet.")
 
@@ -258,8 +300,11 @@ elif choice == "Price Entry":
             notes = st.text_area("Notes (e.g., portion size, packaging)")
             
             if st.form_submit_button("Submit Price"):
-                add_price(product, concession, price, date, notes)
-                st.success("Price submitted successfully!")
+                if add_price(product, concession, price, date, notes):
+                    st.success("Price submitted successfully!")
+                    st.experimental_rerun()
+                else:
+                    st.error("Failed to submit price")
     else:
         if products_df.empty:
             st.error("Please add at least one product first.")
@@ -274,6 +319,9 @@ elif choice == "Benchmark View":
     products_df = get_products_df()
     
     if not prices_df.empty:
+        # Convert date strings to datetime objects for proper sorting
+        prices_df['Date'] = pd.to_datetime(prices_df['Date'])
+        
         # Product selection
         selected_product = st.selectbox("Select Product to Analyze", 
                                       products_df['Product Name'].unique())
@@ -312,6 +360,6 @@ elif choice == "Benchmark View":
 # Data persistence instructions
 st.sidebar.markdown("---")
 st.sidebar.info("""
-**Note:** This app now uses SQLite database for persistent storage. 
+**Note:** This app now uses Supabase database for persistent storage. 
 Data will be saved between sessions.
 """)

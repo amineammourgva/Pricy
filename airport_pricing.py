@@ -222,7 +222,7 @@ elif choice == "Product Management":
                 if name:
                     if add_product(name, category, notes):
                         st.success(f"Product '{name}' added successfully!")
-                        st.experimental_rerun()
+                        st.rerun()
                     else:
                         st.error(f"Product '{name}' already exists!")
                 else:
@@ -239,7 +239,7 @@ elif choice == "Product Management":
             if st.button("Delete Product"):
                 if delete_product(product_to_delete):
                     st.success(f"Product '{product_to_delete}' deleted successfully!")
-                    st.experimental_rerun()
+                    st.rerun()
                 else:
                     st.error("Failed to delete product")
         else:
@@ -261,7 +261,7 @@ elif choice == "Concession Management":
                 if name:
                     if add_concession(name, location, notes):
                         st.success(f"Concession '{name}' added successfully!")
-                        st.experimental_rerun()
+                        st.rerun()
                     else:
                         st.error(f"Concession '{name}' already exists!")
                 else:
@@ -278,7 +278,7 @@ elif choice == "Concession Management":
             if st.button("Delete Concession"):
                 if delete_concession(concession_to_delete):
                     st.success(f"Concession '{concession_to_delete}' deleted successfully!")
-                    st.experimental_rerun()
+                    st.rerun()
                 else:
                     st.error("Failed to delete concession")
         else:
@@ -302,7 +302,7 @@ elif choice == "Price Entry":
             if st.form_submit_button("Submit Price"):
                 if add_price(product, concession, price, date, notes):
                     st.success("Price submitted successfully!")
-                    st.experimental_rerun()
+                    st.rerun()
                 else:
                     st.error("Failed to submit price")
     else:

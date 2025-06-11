@@ -1,42 +1,119 @@
 import streamlit as st
 import pandas as pd
 import datetime
-import matplotlib.pyplot as plt
+import plotly.express as px
 from io import BytesIO
+import sqlite3
+from contextlib import closing
 
-# Initialize session state for data storage
-if 'products' not in st.session_state:
-    st.session_state.products = pd.DataFrame(columns=['Product Name', 'Product Category', 'Notes'])
-    
-if 'concessions' not in st.session_state:
-    st.session_state.concessions = pd.DataFrame(columns=['Concession Name', 'Location Tag', 'Notes'])
-    
-if 'prices' not in st.session_state:
-    st.session_state.prices = pd.DataFrame(columns=['Product', 'Concession', 'Price', 'Date', 'Notes'])
+# Initialize SQLite database
+def init_db():
+    conn = sqlite3.connect('pricy.db')
+    with closing(conn.cursor()) as c:
+        # Create products table
+        c.execute('''CREATE TABLE IF NOT EXISTS products
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     name TEXT UNIQUE,
+                     category TEXT,
+                     notes TEXT)''')
+        
+        # Create concessions table
+        c.execute('''CREATE TABLE IF NOT EXISTS concessions
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     name TEXT UNIQUE,
+                     location TEXT,
+                     notes TEXT)''')
+        
+        # Create prices table
+        c.execute('''CREATE TABLE IF NOT EXISTS prices
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     product_id INTEGER,
+                     concession_id INTEGER,
+                     price REAL,
+                     date DATE,
+                     notes TEXT,
+                     FOREIGN KEY (product_id) REFERENCES products (id),
+                     FOREIGN KEY (concession_id) REFERENCES concessions (id))''')
+    conn.commit()
+    conn.close()
 
-# Helper functions
+# Helper functions for database operations
+def get_db_connection():
+    return sqlite3.connect('pricy.db')
+
 def add_product(name, category, notes):
-    new_product = pd.DataFrame([[name, category, notes]], 
-                              columns=['Product Name', 'Product Category', 'Notes'])
-    st.session_state.products = pd.concat([st.session_state.products, new_product], ignore_index=True)
+    with closing(get_db_connection()) as conn:
+        c = conn.cursor()
+        try:
+            c.execute("INSERT INTO products (name, category, notes) VALUES (?, ?, ?)",
+                     (name, category, notes))
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
 
 def add_concession(name, location, notes):
-    new_concession = pd.DataFrame([[name, location, notes]], 
-                                 columns=['Concession Name', 'Location Tag', 'Notes'])
-    st.session_state.concessions = pd.concat([st.session_state.concessions, new_concession], ignore_index=True)
+    with closing(get_db_connection()) as conn:
+        c = conn.cursor()
+        try:
+            c.execute("INSERT INTO concessions (name, location, notes) VALUES (?, ?, ?)",
+                     (name, location, notes))
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
 
 def add_price(product, concession, price, date, notes):
-    new_price = pd.DataFrame([[product, concession, price, date, notes]], 
-                            columns=['Product', 'Concession', 'Price', 'Date', 'Notes'])
-    st.session_state.prices = pd.concat([st.session_state.prices, new_price], ignore_index=True)
+    with closing(get_db_connection()) as conn:
+        c = conn.cursor()
+        # Get product and concession IDs
+        c.execute("SELECT id FROM products WHERE name=?", (product,))
+        product_id = c.fetchone()[0]
+        
+        c.execute("SELECT id FROM concessions WHERE name=?", (concession,))
+        concession_id = c.fetchone()[0]
+        
+        c.execute("""INSERT INTO prices (product_id, concession_id, price, date, notes)
+                     VALUES (?, ?, ?, ?, ?)""",
+                  (product_id, concession_id, price, date, notes))
+        conn.commit()
 
 def delete_product(name):
-    st.session_state.products = st.session_state.products[st.session_state.products['Product Name'] != name]
-    st.session_state.prices = st.session_state.prices[st.session_state.prices['Product'] != name]
+    with closing(get_db_connection()) as conn:
+        c = conn.cursor()
+        # First delete related prices
+        c.execute("DELETE FROM prices WHERE product_id IN (SELECT id FROM products WHERE name=?)", (name,))
+        # Then delete the product
+        c.execute("DELETE FROM products WHERE name=?", (name,))
+        conn.commit()
 
 def delete_concession(name):
-    st.session_state.concessions = st.session_state.concessions[st.session_state.concessions['Concession Name'] != name]
-    st.session_state.prices = st.session_state.prices[st.session_state.prices['Concession'] != name]
+    with closing(get_db_connection()) as conn:
+        c = conn.cursor()
+        # First delete related prices
+        c.execute("DELETE FROM prices WHERE concession_id IN (SELECT id FROM concessions WHERE name=?)", (name,))
+        # Then delete the concession
+        c.execute("DELETE FROM concessions WHERE name=?", (name,))
+        conn.commit()
+
+def get_products_df():
+    with closing(get_db_connection()) as conn:
+        return pd.read_sql("SELECT name as 'Product Name', category as 'Product Category', notes as 'Notes' FROM products", conn)
+
+def get_concessions_df():
+    with closing(get_db_connection()) as conn:
+        return pd.read_sql("SELECT name as 'Concession Name', location as 'Location Tag', notes as 'Notes' FROM concessions", conn)
+
+def get_prices_df():
+    with closing(get_db_connection()) as conn:
+        return pd.read_sql("""SELECT p.name as Product, c.name as Concession, 
+                                     pr.price as Price, pr.date as Date, pr.notes as Notes
+                              FROM prices pr
+                              JOIN products p ON pr.product_id = p.id
+                              JOIN concessions c ON pr.concession_id = c.id""", conn)
+
+# Initialize database
+init_db()
 
 # Main App
 st.title("✈️ Pricy")
@@ -48,45 +125,48 @@ choice = st.sidebar.selectbox("Navigation", menu)
 # Dashboard
 if choice == "Dashboard":
     st.header("Price Benchmarking Dashboard")
+    prices_df = get_prices_df()
     
-    if not st.session_state.prices.empty:
+    if not prices_df.empty:
         # Latest prices
         st.subheader("Latest Prices")
-        latest_prices = st.session_state.prices.sort_values('Date', ascending=False).drop_duplicates(['Product', 'Concession'])
+        latest_prices = prices_df.sort_values('Date', ascending=False).drop_duplicates(['Product', 'Concession'])
         st.dataframe(latest_prices)
         
         # Price statistics by product
         st.subheader("Price Statistics by Product")
-        if not st.session_state.prices.empty:
-            stats = st.session_state.prices.groupby('Product')['Price'].agg(['mean', 'min', 'max']).reset_index()
-            stats.columns = ['Product', 'Average Price', 'Minimum Price', 'Maximum Price']
-            st.dataframe(stats)
-            
-            # Filtering options
-            st.subheader("Filter Data")
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                product_filter = st.selectbox("Filter by Product", ['All'] + list(st.session_state.products['Product Name'].unique()))
-            
-            with col2:
-                concession_filter = st.selectbox("Filter by Concession", ['All'] + list(st.session_state.concessions['Concession Name'].unique()))
-            
-            with col3:
-                location_filter = st.selectbox("Filter by Location", ['All', 'Airside', 'Landside', 'City'])
-            
-            # Apply filters
-            filtered_data = st.session_state.prices.copy()
-            if product_filter != 'All':
-                filtered_data = filtered_data[filtered_data['Product'] == product_filter]
-            if concession_filter != 'All':
-                filtered_data = filtered_data[filtered_data['Concession'] == concession_filter]
-            if location_filter != 'All':
-                concessions_in_location = st.session_state.concessions[
-                    st.session_state.concessions['Location Tag'] == location_filter]['Concession Name']
-                filtered_data = filtered_data[filtered_data['Concession'].isin(concessions_in_location)]
-            
-            st.dataframe(filtered_data)
+        stats = prices_df.groupby('Product')['Price'].agg(['mean', 'min', 'max']).reset_index()
+        stats.columns = ['Product', 'Average Price', 'Minimum Price', 'Maximum Price']
+        st.dataframe(stats)
+        
+        # Filtering options
+        st.subheader("Filter Data")
+        col1, col2, col3 = st.columns(3)
+        
+        products_df = get_products_df()
+        concessions_df = get_concessions_df()
+        
+        with col1:
+            product_filter = st.selectbox("Filter by Product", ['All'] + list(products_df['Product Name'].unique()))
+        
+        with col2:
+            concession_filter = st.selectbox("Filter by Concession", ['All'] + list(concessions_df['Concession Name'].unique()))
+        
+        with col3:
+            location_filter = st.selectbox("Filter by Location", ['All', 'Airside', 'Landside', 'City'])
+        
+        # Apply filters
+        filtered_data = prices_df.copy()
+        if product_filter != 'All':
+            filtered_data = filtered_data[filtered_data['Product'] == product_filter]
+        if concession_filter != 'All':
+            filtered_data = filtered_data[filtered_data['Concession'] == concession_filter]
+        if location_filter != 'All':
+            concessions_in_location = concessions_df[
+                concessions_df['Location Tag'] == location_filter]['Concession Name']
+            filtered_data = filtered_data[filtered_data['Concession'].isin(concessions_in_location)]
+        
+        st.dataframe(filtered_data)
     else:
         st.warning("No price data available. Please enter some prices first.")
 
@@ -104,21 +184,25 @@ elif choice == "Product Management":
             
             if st.form_submit_button("Add Product"):
                 if name:
-                    add_product(name, category, notes)
-                    st.success(f"Product '{name}' added successfully!")
+                    if add_product(name, category, notes):
+                        st.success(f"Product '{name}' added successfully!")
+                    else:
+                        st.error(f"Product '{name}' already exists!")
                 else:
                     st.error("Product name is required")
     
     with tab2:
-        if not st.session_state.products.empty:
-            st.dataframe(st.session_state.products)
+        products_df = get_products_df()
+        if not products_df.empty:
+            st.dataframe(products_df)
             
             product_to_delete = st.selectbox("Select product to delete", 
-                                           st.session_state.products['Product Name'].unique())
+                                           products_df['Product Name'].unique())
             
             if st.button("Delete Product"):
                 delete_product(product_to_delete)
                 st.success(f"Product '{product_to_delete}' deleted successfully!")
+                st.experimental_rerun()  # Refresh the view
         else:
             st.info("No products added yet.")
 
@@ -136,21 +220,25 @@ elif choice == "Concession Management":
             
             if st.form_submit_button("Add Concession"):
                 if name:
-                    add_concession(name, location, notes)
-                    st.success(f"Concession '{name}' added successfully!")
+                    if add_concession(name, location, notes):
+                        st.success(f"Concession '{name}' added successfully!")
+                    else:
+                        st.error(f"Concession '{name}' already exists!")
                 else:
                     st.error("Concession name is required")
     
     with tab2:
-        if not st.session_state.concessions.empty:
-            st.dataframe(st.session_state.concessions)
+        concessions_df = get_concessions_df()
+        if not concessions_df.empty:
+            st.dataframe(concessions_df)
             
             concession_to_delete = st.selectbox("Select concession to delete", 
-                                             st.session_state.concessions['Concession Name'].unique())
+                                             concessions_df['Concession Name'].unique())
             
             if st.button("Delete Concession"):
                 delete_concession(concession_to_delete)
                 st.success(f"Concession '{concession_to_delete}' deleted successfully!")
+                st.experimental_rerun()  # Refresh the view
         else:
             st.info("No concessions added yet.")
 
@@ -158,10 +246,13 @@ elif choice == "Concession Management":
 elif choice == "Price Entry":
     st.header("Price Entry Form")
     
-    if not st.session_state.products.empty and not st.session_state.concessions.empty:
+    products_df = get_products_df()
+    concessions_df = get_concessions_df()
+    
+    if not products_df.empty and not concessions_df.empty:
         with st.form("price_form"):
-            product = st.selectbox("Select Product*", st.session_state.products['Product Name'].unique())
-            concession = st.selectbox("Select Concession*", st.session_state.concessions['Concession Name'].unique())
+            product = st.selectbox("Select Product*", products_df['Product Name'].unique())
+            concession = st.selectbox("Select Concession*", concessions_df['Concession Name'].unique())
             price = st.number_input("Price*", min_value=0.0, format="%.2f")
             date = st.date_input("Date of Price*", datetime.date.today())
             notes = st.text_area("Notes (e.g., portion size, packaging)")
@@ -170,46 +261,31 @@ elif choice == "Price Entry":
                 add_price(product, concession, price, date, notes)
                 st.success("Price submitted successfully!")
     else:
-        if st.session_state.products.empty:
+        if products_df.empty:
             st.error("Please add at least one product first.")
-        if st.session_state.concessions.empty:
+        if concessions_df.empty:
             st.error("Please add at least one concession first.")
 
 # Benchmark View
 elif choice == "Benchmark View":
     st.header("Price Benchmarking")
     
-    if not st.session_state.prices.empty:
+    prices_df = get_prices_df()
+    products_df = get_products_df()
+    
+    if not prices_df.empty:
         # Product selection
         selected_product = st.selectbox("Select Product to Analyze", 
-                                      st.session_state.products['Product Name'].unique())
+                                      products_df['Product Name'].unique())
         
         # Filter data for selected product
-        product_prices = st.session_state.prices[st.session_state.prices['Product'] == selected_product]
+        product_prices = prices_df[prices_df['Product'] == selected_product]
         
         # Historical price chart
         st.subheader(f"Historical Price Trend for {selected_product}")
-        
-        # Create Matplotlib figure
-        fig, ax = plt.subplots(figsize=(10, 6))
-        
-        # Group by concession and plot each one
-        for concession, group in product_prices.groupby('Concession'):
-            group = group.sort_values('Date')
-            ax.plot(group['Date'], group['Price'], marker='o', label=concession)
-        
-        ax.set_title(f"Price Trend for {selected_product}")
-        ax.set_xlabel("Date")
-        ax.set_ylabel("Price")
-        ax.legend()
-        ax.grid(True)
-        
-        # Rotate x-axis labels for better readability
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-        
-        # Display the plot in Streamlit
-        st.pyplot(fig)
+        fig = px.line(product_prices, x='Date', y='Price', color='Concession',
+                      title=f"Price Trend for {selected_product}")
+        st.plotly_chart(fig)
         
         # Latest price comparison
         st.subheader("Latest Price Comparison")
@@ -236,6 +312,6 @@ elif choice == "Benchmark View":
 # Data persistence instructions
 st.sidebar.markdown("---")
 st.sidebar.info("""
-**Note:** This app uses session storage. Data will be lost when the browser is closed. 
-For permanent storage, export your data regularly.
+**Note:** This app now uses SQLite database for persistent storage. 
+Data will be saved between sessions.
 """)

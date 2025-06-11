@@ -132,16 +132,28 @@ def get_prices_df():
         response = supabase.table("prices").select("*, products(name), concessions(name)").execute()
         df = pd.DataFrame(response.data)
         
-        # Rename columns for consistency with original app
+        # Check if the expected columns exist before renaming
         if not df.empty:
+            # The joined tables might come as nested dictionaries
+            if 'products' in df.columns and isinstance(df['products'].iloc[0], dict):
+                df['Product'] = df['products'].apply(lambda x: x.get('name', ''))
+            if 'concessions' in df.columns and isinstance(df['concessions'].iloc[0], dict):
+                df['Concession'] = df['concessions'].apply(lambda x: x.get('name', ''))
+            
+            # Rename other columns
             df = df.rename(columns={
-                "products.name": "Product",
-                "concessions.name": "Concession",
                 "price": "Price",
                 "date": "Date",
                 "notes": "Notes"
             })
-            df = df[["Product", "Concession", "Price", "Date", "Notes"]]  # Reorder columns
+            
+            # Select and reorder columns if they exist
+            available_columns = []
+            for col in ["Product", "Concession", "Price", "Date", "Notes"]:
+                if col in df.columns:
+                    available_columns.append(col)
+            
+            df = df[available_columns]  # Reorder columns
         
         return df
     except Exception as e:

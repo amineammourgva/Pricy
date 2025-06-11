@@ -8,8 +8,8 @@ from supabase import create_client, Client
 # Initialize Supabase client
 @st.cache_resource
 def init_supabase():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
+    url = "https://lczakwhqgpwgurbethyl.supabase.co"
+    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxjemFrd2hxZ3B3Z3VyYmV0aHlsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDk2Mzc3NjIsImV4cCI6MjA2NTIxMzc2Mn0.hJeo-U_gCC8HCCb_E9-rFpdl0pIXz3DAJJEaIExl6w4"
     return create_client(url, key)
 
 supabase = init_supabase()
